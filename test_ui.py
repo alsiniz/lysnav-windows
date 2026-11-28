@@ -14,10 +14,10 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 try:
     from PySide6.QtCore import QObject, Qt, QPoint, QPointF, QCoreApplication, QEvent, QTimer, QProcess
     from PySide6.QtTest import QTest
-    from PySide6.QtGui import QWheelEvent, QIcon
+    from PySide6.QtGui import QColor, QPalette, QWheelEvent, QIcon
     from PySide6.QtWidgets import QApplication, QWidget, QLabel, QPushButton, QMenu, QScrollArea, QDialog, QDialogButtonBox, QLineEdit
     from shiboken6 import isValid
-    from app import custom_tray_qicon, native_tray_icon, panel_icon_filename, ClickToJumpSlider, TemperatureSlider, TraySettingsDialog, ConnectionDialog, TokenPairingDialog, hub_action_svg, MainWindow
+    from app import custom_tray_qicon, native_tray_icon, panel_icon_filename, ClickToJumpSlider, TemperatureSlider, Wheel, TraySettingsDialog, ConnectionDialog, TokenPairingDialog, hub_action_svg, MainWindow
     from core import ALL_APPROVED, EnvironmentInfo, LightInfo
 except ImportError:
     if os.environ.get('LYSNAV_REQUIRE_QT_TESTS') == '1':
@@ -152,41 +152,76 @@ class SliderTests(unittest.TestCase):
         self.assertEqual(seen, [slider.value()])
         slider.close()
 
-    def test_temperature_tint_is_drawn_and_previews_an_rgb_light(self):
-        slider = TemperatureSlider("lamp")
-        self.addCleanup(slider.deleteLater)
-        slider.setRange(2700, 6500)
-        slider.setValue(2700)
-        slider.set_rgb_mode(True)
+    def test_temperature_gradient_is_static_and_clean_around_the_thumb(self):
+        from PySide6.QtWidgets import QStyle, QStyleOptionSlider
+
+        readout = QLabel()
+        slider = TemperatureSlider(("lamp",), readout)
+        self.addCleanup(slider.close)
+        slider.setRange(2200, 6500)
         slider.resize(320, 32)
+        palette = slider.palette()
+        accent = QColor("#00ff00")
+        palette.setColor(QPalette.ColorRole.Highlight, accent)
+        slider.setPalette(palette)
         slider.show()
         self.app.processEvents()
 
-        def track_pixel():
-            from PySide6.QtWidgets import QStyle, QStyleOptionSlider
+        def track_colours():
             option = QStyleOptionSlider()
             slider.initStyleOption(option)
-            groove = slider.style().subControlRect(QStyle.ComplexControl.CC_Slider, option,
-                                                  QStyle.SubControl.SC_SliderGroove, slider)
+            handle = slider.style().subControlRect(QStyle.ComplexControl.CC_Slider, option,
+                                                   QStyle.SubControl.SC_SliderHandle, slider)
             pixmap = slider.grab()
-            point = groove.center() * pixmap.devicePixelRatio()
-            return pixmap.toImage().pixelColor(point)
+            image, scale = pixmap.toImage(), pixmap.devicePixelRatio()
+            y = round(handle.center().y() * scale)
+            left_edge = round(handle.left() * scale)
+            right_edge = round((handle.right() + 1) * scale)
+            self.assertNotIn(accent, [image.pixelColor(x, y) for x in range(left_edge)])
+            self.assertNotIn(accent, [image.pixelColor(x, y) for x in range(right_edge, image.width())])
+            return (image.pixelColor(round(28 * scale), y),
+                    image.pixelColor(round(290 * scale), y))
 
-        self.assertTrue(slider.isEnabled())
-        self.assertEqual(track_pixel().rgba(), slider.palette().mid().color().rgba())
-        QTest.keyClick(slider, Qt.Key.Key_End)
-        self.assertEqual(slider.value(), 6500)
-        cool = track_pixel()
-        self.assertGreater(cool.blue(), cool.red())
-        QTest.keyClick(slider, Qt.Key.Key_Home)
-        warm = track_pixel()
+        slider.setValue(3400)
+        warm, cool = track_colours()
         self.assertGreater(warm.red(), warm.blue())
-        self.assertNotEqual(warm, cool)
-        slider.clear_preview()
-        self.assertEqual(track_pixel().rgba(), slider.palette().mid().color().rgba())
-        slider.set_rgb_mode(False)
-        self.assertEqual(track_pixel(), warm)
-        slider.hide()
+        self.assertGreater(cool.blue(), cool.red())
+        slider.setValue(5600)
+        self.assertEqual(track_colours(), (warm, cool))
+        self.assertEqual(readout.text(), "5600 K")
+
+        rgb = LightInfo("lamp", "Desk", "room", "Study", True, ("colorTemperature",),
+                        True, 50, 3400, 2200, 6500, 270, .7, "color")
+        slider.update_from_lights([rgb])
+        dim_warm, dim_cool = track_colours()
+        self.assertLess(0, dim_warm.red() - dim_warm.blue())
+        self.assertLess(dim_warm.red() - dim_warm.blue(), warm.red() - warm.blue())
+        self.assertGreater(dim_cool.blue(), dim_cool.red())
+        self.assertEqual(readout.text(), "RGB mode")
+        QTest.keyClick(slider, Qt.Key.Key_Right)
+        self.assertEqual(readout.text(), f"{slider.value()} K")
+        self.assertEqual(track_colours(), (dim_warm, dim_cool))
+
+    def test_colour_wheel_antialiases_the_disk_edge(self):
+        wheel = Wheel(180, 1)
+        self.addCleanup(wheel.close)
+        palette = wheel.palette()
+        palette.setColor(QPalette.ColorRole.Window, QColor("black"))
+        wheel.setPalette(palette)
+        wheel.setAutoFillBackground(True)
+        wheel.show()
+        pixmap = wheel.grab()
+        image, scale = pixmap.toImage(), pixmap.devicePixelRatio()
+        east = round((wheel.center + wheel.r) * scale)
+        centre = round(wheel.center * scale)
+        self.assertEqual(image.pixelColor(east + 2, centre), QColor("black"))
+        self.assertEqual(image.pixelColor(east - 3, centre).red(), 255)
+        self.assertTrue(any(0 < image.pixelColor(x, y).red() < 255
+                            for x in range(east - 5, east + 2)
+                            for y in range(centre, centre + round(22 * scale))))
+        north = image.pixelColor(centre, round((wheel.center - wheel.r + 12) * scale))
+        self.assertGreater(north.green(), north.red())
+        self.assertGreater(north.green(), north.blue())
 
     def test_track_click_jumps_and_emits_commit(self):
         slider = ClickToJumpSlider(Qt.Orientation.Horizontal)
@@ -520,25 +555,62 @@ class RefreshLifetimeTests(unittest.TestCase):
                             capabilities=self.light.capabilities + ("colorTemperature", "colorHue", "colorSaturation"))
         window.on_loaded(([rgb_light], [], ""))
         _, individual = window.tabs.findChildren(TemperatureSlider)
-        self.assertEqual(individual.light_id, rgb_light.id)
+        self.assertEqual(individual.light_ids, (rgb_light.id,))
         self.assertTrue(individual.isEnabled())
-        self.assertIn("RGB colour is active", individual.accessibleDescription())
-        self.assertEqual(individual._track_colour(), individual.palette().mid().color())
+        self.assertIn("Adjust to switch this light to white", individual.accessibleDescription())
+        self.assertEqual(individual.readout.text(), "RGB mode")
 
         window.worker = MagicMock()
         QTest.keyClick(individual, Qt.Key.Key_End)
         window.flush_slider_wheel()
         window.worker.submit.assert_called_once_with("control", [rgb_light.id], "temperature", 6500)
-        self.assertNotEqual(individual._track_colour(), individual.palette().mid().color())
+        self.assertEqual(individual.readout.text(), "6500 K")
+        self.assertTrue(individual._dimmed)
         window.on_failed("timeout")
-        self.assertEqual(individual._track_colour(), individual.palette().mid().color())
+        self.assertEqual(individual.readout.text(), "RGB mode")
 
         window.on_loaded(([replace(rgb_light, color_mode="temperature", temperature=6500)], [], ""))
         self.flush_deletions()
         _, individual = window.tabs.findChildren(TemperatureSlider)
-        self.assertEqual(individual.value(), 6500)
+        self.assertEqual(individual.readout.text(), "6500 K")
         self.assertEqual(individual.accessibleDescription(), "")
-        self.assertNotEqual(individual._track_colour(), individual.palette().mid().color())
+        self.assertFalse(individual._dimmed)
+
+    def test_room_temperature_state_and_shared_command_range(self):
+        window = self.window
+        window.config["approved"]["lamp2"] = "room"
+        window.worker = MagicMock()
+        white = replace(self.light, color_mode="temperature", temperature=3000,
+                        temp_low=2200, temp_high=6500,
+                        capabilities=self.light.capabilities + ("colorTemperature",))
+        other = replace(white, id="lamp2", temp_low=2700, temp_high=5000)
+        unapproved = replace(white, id="unapproved", temp_low=3500, temp_high=4000)
+        cases = [
+            (white, other, "3000 K", False),
+            (white, replace(other, temperature=4700), "Mixed temperatures", False),
+            (white, replace(other, color_mode="color"), "Mixed modes", True),
+            (replace(white, color_mode="color"), replace(other, color_mode="color"), "RGB mode", True),
+            (replace(white, temperature=7000), other, "Mixed modes", True),
+        ]
+        for first, second, status, dimmed in cases:
+            with self.subTest(status=status):
+                window.on_loaded(([first, second, unapproved], [], ""))
+                self.flush_deletions()
+                room = next(slider for slider in window.tabs.findChildren(TemperatureSlider)
+                            if slider.room_hint is not None)
+                self.assertEqual(room.readout.text(), status)
+                self.assertEqual(room._dimmed, dimmed)
+                self.assertEqual(room.room_hint.isHidden(), not dimmed)
+                self.assertEqual((room.minimum(), room.maximum()), (2700, 5000))
+                self.assertTrue(room.isEnabled())
+                if status == "Mixed modes":
+                    QTest.keyClick(room, Qt.Key.Key_End)
+                    window.flush_slider_wheel()
+                    window.worker.submit.assert_called_once_with(
+                        "control", ["lamp", "lamp2"], "temperature", 5000)
+                    self.assertEqual(room.readout.text(), "5000 K")
+                    self.assertTrue(room._dimmed)
+                    window.worker.submit.reset_mock()
 
     def test_tray_selection_controls_icon_and_middle_click_targets(self):
         window = self.window

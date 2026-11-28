@@ -21,7 +21,7 @@ based on upstream commit [`a334176`](https://github.com/alsiniz/lysnav-plasma/co
 App screenshots use sample rooms and devices.
 
 <p align="center">
-  <img src="docs/screenshots/main-window.png" alt="Lysnav for Windows showing room-wide and individual light controls" width="860">
+  <img src="docs/screenshots/main-window.png?v=1.1.0" alt="Lysnav for Windows showing room-wide and individual light controls" width="860">
 </p>
 
 ## Why Lysnav for Windows?
@@ -41,8 +41,12 @@ App screenshots use sample rooms and devices.
 
 ### Live colour control
 
+The colour temperature slider uses a fixed warm-to-cool gradient. The track dims when a light
+uses RGB. Room controls show mixed temperatures or mixed modes when lights differ. Moving the
+room slider sets all approved lights in that room to white within their shared temperature range.
+
 <p align="center">
-  <img src="docs/screenshots/colour-wheel.png" alt="Live colour wheel with a purple selection and hue and saturation readouts" width="505">
+  <img src="docs/screenshots/colour-wheel.png?v=1.1.0" alt="Live colour wheel with a purple selection and hue and saturation readouts" width="505">
 </p>
 
 ### Climate readings

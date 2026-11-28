@@ -16,11 +16,11 @@ from version import APP_NAME, VERSION, KOFI_URL
 from windows_tray import TrayWheelHook
 from pairing import valid_hub_address, extract_generated_token, run_token_helper
 
-from PySide6.QtCore import QByteArray, QSize, Qt, QThread, Signal, QTimer, QPointF, QUrl, QProcess, QProcessEnvironment, QLockFile, QEvent, QRect
+from PySide6.QtCore import QByteArray, QSize, Qt, QThread, Signal, QTimer, QPointF, QRectF, QUrl, QProcess, QProcessEnvironment, QLockFile, QEvent, QRect
 from PySide6.QtGui import QColor, QPainter, QPen, QIcon, QImage, QImageReader, QPixmap, QCursor, QKeySequence, QShortcut, QDesktopServices
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtSvg import QSvgRenderer
-from PySide6.QtGui import QRegion
+from PySide6.QtGui import QConicalGradient, QLinearGradient, QRadialGradient
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QFileDialog, QLayout,
     QLabel, QPushButton, QLineEdit, QDialog, QDialogButtonBox, QPlainTextEdit, QHeaderView, QTreeWidget,
@@ -182,22 +182,23 @@ class Wheel(QWidget):
         self.saturation = max(0.0, min(1.0, float(saturation)))
         self.r = 113
         self.center = 126
-        self.wheel_image = QImage(self.size(), QImage.Format.Format_ARGB32)
-        self.wheel_image.fill(Qt.GlobalColor.transparent)
-        for y in range(self.height()):
-            for x in range(self.width()):
-                dx, dy = x - self.center, self.center - y
-                distance = math.hypot(dx, dy)
-                if distance <= self.r:
-                    hue = math.degrees(math.atan2(dy, dx)) % 360
-                    sat = distance / self.r
-                    self.wheel_image.setPixelColor(x, y, QColor.fromHsv(round(hue) % 360, round(sat * 255), 255))
         self.setToolTip("Angle selects hue, distance from centre selects saturation")
 
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.drawImage(0, 0, self.wheel_image)
+        centre = QPointF(self.center, self.center)
+        hue_ring = QConicalGradient(centre, 0)
+        for step in range(7):
+            hue_ring.setColorAt(step / 6, QColor.fromHsv(step * 60 % 360, 255, 255))
+        saturation = QRadialGradient(centre, self.r)
+        saturation.setColorAt(0, QColor(255, 255, 255))
+        saturation.setColorAt(1, QColor(255, 255, 255, 0))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(hue_ring)
+        p.drawEllipse(centre, self.r, self.r)
+        p.setBrush(saturation)
+        p.drawEllipse(centre, self.r, self.r)
         x = self.center + self.r * self.saturation * math.cos(math.radians(self.hue))
         y = self.center - self.r * self.saturation * math.sin(math.radians(self.hue))
         p.setPen(QPen(QColor("#151515"), 3))
@@ -907,33 +908,90 @@ TEMPERATURE_COLOURS = (
 )
 
 
+def temperature_colour(kelvin):
+    kelvin = max(TEMPERATURE_COLOURS[0][0], kelvin)
+    for (low, warm), (high, cool) in zip(TEMPERATURE_COLOURS, TEMPERATURE_COLOURS[1:]):
+        if kelvin <= high:
+            fraction = (kelvin - low) / (high - low)
+            return QColor(*(round(a + fraction * (b - a)) for a, b in zip(warm, cool)))
+    return QColor(*TEMPERATURE_COLOURS[-1][1])
+
+
 class TemperatureSlider(ClickToJumpSlider):
     keyboardAdjusted = Signal(int)
 
-    def __init__(self, light_id=None):
+    def __init__(self, light_ids, readout, room_hint=None):
         super().__init__(Qt.Orientation.Horizontal)
-        self.light_id = light_id
-        self._rgb_mode = False
-        self._previewing = False
-        self.setAccessibleName("Colour temperature")
-        self.valueChanged.connect(self._preview_temperature)
-        self.sliderPressed.connect(self._preview_temperature)
-        self.trackClicked.connect(self._preview_temperature)
+        self.light_ids = tuple(light_ids)
+        self.readout = readout
+        self.room_hint = room_hint
+        self._status = ""
+        self._dimmed = False
+        self.setAccessibleName("Room colour temperature" if room_hint is not None else "Colour temperature")
+        states = ["RGB mode", "Outside range", "Temperature unavailable", "8500 K"]
+        if room_hint is not None:
+            states += ["Mixed modes", "Mixed temperatures"]
+        self.readout.setMinimumWidth(max(self.readout.fontMetrics().horizontalAdvance(state) for state in states))
+        self.valueChanged.connect(self._show_temperature)
+        self.sliderPressed.connect(self._show_temperature)
+        self.trackClicked.connect(self._show_temperature)
 
-    def set_rgb_mode(self, active):
-        hint = "RGB colour is active. Adjust the slider to switch to white temperature." if active else ""
-        self._rgb_mode = active
-        self.setToolTip(hint)
-        self.setAccessibleDescription(hint)
+    def update_from_lights(self, lights):
+        known_temperatures = [
+            light.temperature for light in lights
+            if light.color_mode != "color" and light.temperature is not None
+            and light.temp_low <= light.temperature <= light.temp_high
+        ] if self.isEnabled() else []
+        rgb_count = sum(light.color_mode == "color" for light in lights)
+        outside_count = sum(
+            light.color_mode != "color" and light.temperature is not None
+            and light.temp_low is not None and light.temp_high is not None
+            and not light.temp_low <= light.temperature <= light.temp_high
+            for light in lights
+        )
+        self._dimmed = bool(rgb_count or outside_count)
+        if not self.isEnabled():
+            self._status = "—"
+        elif rgb_count == len(lights):
+            self._status = "RGB mode"
+        elif outside_count == len(lights):
+            self._status = "Outside range"
+        elif self._dimmed:
+            self._status = "Mixed modes"
+        elif len(set(known_temperatures)) > 1:
+            self._status = "Mixed temperatures"
+        elif len(known_temperatures) < len(lights):
+            self._status = "Temperature unavailable"
+        else:
+            self._status = ""
+
+        if not self.isSliderDown():
+            if known_temperatures:
+                self.setValue(round(sum(known_temperatures) / len(known_temperatures)))
+            else:
+                self.setValue((self.minimum() + self.maximum()) // 2)
+        hint = ""
+        if self._dimmed and self.isEnabled():
+            hint = ("Adjusting sets all approved lights in this room to white."
+                    if self.room_hint is not None else "Adjust to switch this light to white.")
+        if self.room_hint is not None:
+            self.room_hint.setVisible(bool(hint))
+        description = ". ".join(filter(None, (self._status, hint))) if self.isEnabled() else ""
+        self.setToolTip(description)
+        self.setAccessibleDescription(description)
         self.clear_preview()
 
     def clear_preview(self):
-        self._previewing = self.isSliderDown()
+        if self._status and not self.isSliderDown():
+            self.readout.setText(self._status)
+        else:
+            self._show_temperature()
         self.update()
 
-    def _preview_temperature(self):
-        self._previewing = True
-        self.update()
+    def _show_temperature(self):
+        self.readout.setText(f"{self.value()} K")
+        if self._dimmed:
+            self.update()
 
     def keyPressEvent(self, event):
         previous = self.value()
@@ -941,42 +999,56 @@ class TemperatureSlider(ClickToJumpSlider):
         if self.value() != previous:
             self.keyboardAdjusted.emit(self.value())
 
-    def _track_colour(self):
-        if self._rgb_mode and not self._previewing:
-            return self.palette().mid().color()
-        kelvin = max(TEMPERATURE_COLOURS[0][0], self.value())
-        for (low, warm), (high, cool) in zip(TEMPERATURE_COLOURS, TEMPERATURE_COLOURS[1:]):
-            if kelvin <= high:
-                fraction = (kelvin - low) / (high - low)
-                return QColor(*(round(a + fraction * (b - a)) for a, b in zip(warm, cool)))
-        return QColor(*TEMPERATURE_COLOURS[-1][1])
-
     def paintEvent(self, event):
-        super().paintEvent(event)
-        if not self.isEnabled():
-            return
-
         option = QStyleOptionSlider()
         self.initStyleOption(option)
         control = QStyle.ComplexControl.CC_Slider
-        groove = self.style().subControlRect(control, option, QStyle.SubControl.SC_SliderGroove, self)
-        handle = self.style().subControlRect(control, option, QStyle.SubControl.SC_SliderHandle, self)
+        groove = QRectF(self.style().subControlRect(control, option, QStyle.SubControl.SC_SliderGroove, self))
+        handle = QRectF(self.style().subControlRect(control, option, QStyle.SubControl.SC_SliderHandle, self))
         if not groove.isValid() or not handle.isValid():
             return
 
-        # Preserve the theme's handle and focus indicator. The stripe uses the
-        # native groove position, including on styles that ignore slider palettes.
-        thickness = max(3, handle.height() // 3)
-        stripe = groove.adjusted(1, 0, -1, 0)
-        stripe.setHeight(thickness)
-        stripe.moveCenter(groove.center())
+        # Use the native geometry for hit testing and dragging, and paint the
+        # whole control together so no native groove shows around the thumb.
+        centre = handle.center()
+        thickness = max(4.0, min(handle.width(), handle.height()) / 2.4)
+        track = QRectF(groove.left() + 1, centre.y() - thickness / 2, groove.width() - 2, thickness)
+        warm_end, cool_end = track.left(), track.right()
+        if option.upsideDown:
+            warm_end, cool_end = cool_end, warm_end
+        gradient = QLinearGradient(warm_end, 0, cool_end, 0)
+        low, high = self.minimum(), self.maximum()
+        stops = [low, *(k for k, _ in TEMPERATURE_COLOURS if low < k < high), high]
+        muted = self.palette().mid().color()
+        for kelvin in stops:
+            colour = temperature_colour(kelvin) if self.isEnabled() else muted
+            if self._dimmed and self.isEnabled():
+                colour = QColor(*(round(0.30 * channel + 0.70 * neutral)
+                                 for channel, neutral in zip(colour.getRgb()[:3], muted.getRgb()[:3])))
+            gradient.setColorAt((kelvin - low) / max(1, high - low), colour)
+
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setClipRegion(QRegion(self.rect()).subtracted(QRegion(handle)))
-        painter.setPen(self.palette().windowText().color())
-        painter.setBrush(self._track_colour())
-        painter.drawRoundedRect(stripe, thickness / 2, thickness / 2)
-        painter.end()
+        edge = self.palette().windowText().color()
+        edge.setAlpha(140)
+        painter.setPen(QPen(edge, 1))
+        painter.setBrush(gradient)
+        painter.drawRoundedRect(track, thickness / 2, thickness / 2)
+
+        thumb = handle.adjusted(1.5, 1.5, -1.5, -1.5)
+        thumb.setHeight(min(thumb.height(), thickness + 7))
+        thumb.moveCenter(centre)
+        thumb_edge = self.palette().windowText().color()
+        stroke = 1
+        if self.hasFocus():
+            thumb_edge = self.palette().highlight().color()
+            stroke = 2
+        thumb_colour = temperature_colour(self.value()) if self.isEnabled() else muted
+        if self._dimmed and self.readout.text() == self._status:
+            thumb_colour = self.palette().button().color()
+        painter.setPen(QPen(thumb_edge, stroke))
+        painter.setBrush(thumb_colour)
+        painter.drawRoundedRect(thumb, 3, 3)
 
 
 def mouse_control_pixmap(palette, middle_click=False):
@@ -1683,9 +1755,10 @@ class MainWindow(QMainWindow):
         if changed:
             self.lights = [replace(light, color_mode="color") if light.id in changed else light
                            for light in self.lights]
+            current = {light.id: light for light in self.lights}
             for slider in self.tabs.findChildren(TemperatureSlider):
-                if slider.light_id in changed:
-                    slider.set_rgb_mode(True)
+                if changed.intersection(slider.light_ids) and all(i in current for i in slider.light_ids):
+                    slider.update_from_lights([current[i] for i in slider.light_ids])
 
     def on_completed(self, message):
         self.status.setText(message)
@@ -1802,25 +1875,26 @@ class MainWindow(QMainWindow):
                     supported = False
                 line = QHBoxLayout()
                 line.addWidget(QLabel("Brightness" if action == "brightness" else "Warm  ⇄  Cool"))
+                label = QLabel()
+                label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                room_hint = None
                 if action == "temperature":
-                    slider = TemperatureSlider(None if is_group else lights[0].id)
+                    if is_group:
+                        room_hint = wrapped_label("Adjusting sets all approved lights in this room to white.")
+                    slider = TemperatureSlider(ids, label, room_hint)
                     slider.keyboardAdjusted.connect(lambda value, ids=tuple(ids), a=action:
                                                     self.queue_slider_wheel(ids, a, value))
+                    slider.setRange(*((bounds[0], bounds[1]) if 0 < bounds[0] <= bounds[1] else (1, 1)))
+                    slider.setEnabled(supported)
+                    slider.update_from_lights(lights)
                 else:
                     slider = ClickToJumpSlider(Qt.Orientation.Horizontal)
-                slider.setMinimum(bounds[0] if bounds[0] < bounds[1] else 1)
-                slider.setMaximum(bounds[1] if bounds[0] < bounds[1] else 1)
-                start = lights[0].brightness if action == "brightness" else (lights[0].temperature or bounds[0])
-                slider.setValue(max(slider.minimum(), min(slider.maximum(), start)))
-                slider.setEnabled(supported)
-                if action == "temperature":
-                    slider.set_rgb_mode(not is_group and lights[0].color_mode == "color")
-                label = QLabel()
-                label.setMinimumWidth(68)
-                label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                suffix = "%" if action == "brightness" else " K"
-                label.setText(f"{slider.value()}{suffix}")
-                slider.valueChanged.connect(lambda v, lbl=label, s=suffix: lbl.setText(f"{v}{s}"))
+                    slider.setRange(*bounds)
+                    slider.setValue(lights[0].brightness)
+                    slider.setEnabled(supported)
+                    label.setMinimumWidth(68)
+                    label.setText(f"{slider.value()}%")
+                    slider.valueChanged.connect(lambda v, lbl=label: lbl.setText(f"{v}%"))
                 slider.sliderPressed.connect(lambda ids=tuple(ids), a=action: self.cancel_slider_wheel(ids, a))
                 slider.sliderReleased.connect(lambda sl=slider, ids=tuple(ids), a=action:
                                               self.commit_slider(ids, a, sl.value()))
@@ -1831,6 +1905,8 @@ class MainWindow(QMainWindow):
                 line.addWidget(slider, stretch=1)
                 line.addWidget(label)
                 layout.addLayout(line)
+                if room_hint is not None:
+                    layout.addWidget(room_hint)
             else:
                 line = QHBoxLayout()
                 button = QPushButton("Live colour wheel…")

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.0 (2026-11-28)
+
+- Colour temperature sliders use a fixed warm-to-cool gradient. RGB mode dims the track while keeping the slider usable.
+- Room controls identify mixed temperatures and mixed modes. Adjusting the room slider switches all approved lights in that room to white within their shared temperature range.
+- The temperature track and thumb have clean edges, and the live colour wheel is antialiased at the display's scale.
+
 ## 1.0.0 (2026-11-28)
 
 - Dialogs adapt to font size and available screen space. Long forms scroll with their action buttons visible.
