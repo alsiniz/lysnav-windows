@@ -54,3 +54,25 @@ jobs:
           name: lysnav-windows-x64-portable-exe
           path: release/portable-exe/
           if-no-files-found: error
+
+  msix:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: windows-2025
+    timeout-minutes: 20
+    env:
+      QT_QPA_PLATFORM: offscreen
+      LYSNAV_REQUIRE_QT_TESTS: '1'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - run: python -m pip install -r requirements-msix.txt
+      - run: python -m unittest test_store
+      - run: python packaging/build_msix.py
+      - uses: actions/upload-artifact@v6
+        with:
+          name: lysnav-windows-x64-msix
+          path: release/msix/*.msix
+          if-no-files-found: error

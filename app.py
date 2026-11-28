@@ -92,9 +92,10 @@ class HubWorker(QThread):
     completed = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, ip: str, token: str, approved: dict[str, str]):
+    def __init__(self, ip: str, token: str, approved: dict[str, str], *, can_access=None):
         super().__init__()
         self.ip = ip
+        self._can_access = can_access
         self.token = token
         self._approved = dict(approved)
         self._lock = Lock()
@@ -120,7 +121,12 @@ class HubWorker(QThread):
     def stop(self):
         self._jobs.put(("stop", ()))
 
+    def _has_access(self):
+        return self._can_access is None or self._can_access()
+
     def _publish(self, hub):
+        if not self._has_access() or self.isInterruptionRequested():
+            return
         lights = snapshot(hub)
         warning = ""
         try:
@@ -133,11 +139,13 @@ class HubWorker(QThread):
 
     def run(self):
         # Import in worker so all network I/O remains outside the UI thread.
+        if not self._has_access():
+            return
         import dirigera
         hub = dirigera.Hub(token=self.token, ip_address=self.ip)
         while True:
             kind, args = self._jobs.get()
-            if kind == "stop":
+            if kind == "stop" or self.isInterruptionRequested() or not self._has_access():
                 break
             try:
                 if kind == "refresh":
@@ -149,6 +157,8 @@ class HubWorker(QThread):
                         self._preview_queued = False
                         approved = dict(self._approved)
                     for ids, value in previews.items():
+                        if self.isInterruptionRequested() or not self._has_access():
+                            break
                         apply(hub, approved, list(ids), "color", value)
                         self.color_preview_applied.emit(ids)
                     # Refresh once when the wheel closes; don't read the whole
@@ -1255,10 +1265,12 @@ class TraySettingsDialog(QDialog):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, *, settings_file=None, start_hub=True, can_access=None):
         super().__init__()
         self.setWindowTitle(APP_NAME)
-        self.config = read_config()
+        self._settings_file = settings_file
+        self._can_access = can_access
+        self.config = read_config(settings_file)
         self.lights = []
         self.sensors = []
         self._tray_state_stale = True
@@ -1332,6 +1344,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.status)
         fit_window(self, 94, 42)
         self._create_tray()
+        if start_hub:
+            self.begin_hub_session()
+
+    def begin_hub_session(self):
         if self.config.get("ip") and self.config.get("token"):
             self.start_worker()
         else:
@@ -1466,7 +1482,7 @@ class MainWindow(QMainWindow):
         self._tray_pending_ids = ()
         self._tray_scroll_accumulator = 0
         self.config["tray_room"] = rid
-        write_config(self.config)
+        write_config(self.config, self._settings_file)
         self.update_tray_tooltip()
         self.update_tray_menu()
 
@@ -1696,7 +1712,7 @@ class MainWindow(QMainWindow):
                        "approved_sensors": dict(self.config["approved_sensors"]) if same_hub else {},
                        "tray_room": self.config.get("tray_room") if same_hub else None,
                        "tray_icon_path": self.config.get("tray_icon_path", "")}
-        write_config(self.config)
+        write_config(self.config, self._settings_file)
         self.lights = []
         self.sensors = []
         self._tray_state_stale = True
@@ -1709,7 +1725,8 @@ class MainWindow(QMainWindow):
         self.start_worker()
 
     def start_worker(self):
-        self.worker = HubWorker(self.config["ip"], self.config["token"], self.config["approved"])
+        self.worker = HubWorker(self.config["ip"], self.config["token"], self.config["approved"],
+                                can_access=self._can_access)
         self.worker.loaded.connect(self.on_loaded)
         self.worker.color_preview_applied.connect(self.on_color_preview_applied)
         self.worker.completed.connect(self.on_completed)
@@ -1783,7 +1800,7 @@ class MainWindow(QMainWindow):
         self._slider_wheel_pending.clear()
         self.config["approved"] = dialog.selection_lights
         self.config["approved_sensors"] = dialog.selection_sensors
-        write_config(self.config)
+        write_config(self.config, self._settings_file)
         if self.worker:
             self.worker.set_approved(dialog.selection_lights)
         self._tray_pending_level = None
@@ -2032,7 +2049,7 @@ class MainWindow(QMainWindow):
         QApplication.instance().quit()
 
 
-def main():
+def main(create_window=MainWindow, *, settings_file=None):
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon(str(ASSETS / "lysnav-logo.svg")))
     if sys.argv[1:] == ["--check-runtime"]:
@@ -2063,7 +2080,7 @@ def main():
     app.setApplicationDisplayName(APP_NAME)
     app.setQuitOnLastWindowClosed(False)
     start_requested = "--tray" in sys.argv
-    settings_dir = config_path().parent
+    settings_dir = (settings_file or config_path()).parent
     try:
         settings_dir.mkdir(parents=True, exist_ok=True)
     except OSError as error:
@@ -2088,7 +2105,7 @@ def main():
     server = QLocalServer(app)
     server.setSocketOptions(QLocalServer.SocketOption.UserAccessOption)
     listening = server.listen(server_name)
-    window = MainWindow()
+    window = create_window(settings_file=settings_file)
 
     def open_existing_window():
         while server.hasPendingConnections():
@@ -2111,8 +2128,12 @@ def main():
     sys.exit(app.exec())
 
 
-if __name__ == "__main__":
+def run_entry_point(launch=main):
     if len(sys.argv) == 3 and sys.argv[1] == "--token-helper":
         run_token_helper(sys.argv[2])
     else:
-        main()
+        launch()
+
+
+if __name__ == "__main__":
+    run_entry_point()

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+         xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+         xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+         xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+         IgnorableNamespaces="uap desktop rescap">
+  <Identity Name="alsiniz.Lysnav" Publisher="CN=E3325A50-9A6E-4ED8-81F1-96D99045E73B"
+            Version="1.1.0.0" ProcessorArchitecture="x64" />
+  <Properties>
+    <DisplayName>Lysnav</DisplayName>
+    <PublisherDisplayName>alsiniz</PublisherDisplayName>
+    <Logo>StoreAssets\StoreLogo.png</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.22000.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+  <Applications>
+    <Application Id="Lysnav" Executable="Lysnav.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements DisplayName="Lysnav"
+                          Description="Local lighting and climate controls for IKEA DIRIGERA"
+                          BackgroundColor="transparent"
+                          Square150x150Logo="StoreAssets\Square150x150Logo.png"
+                          Square44x44Logo="StoreAssets\Square44x44Logo.png" />
+      <Extensions>
+        <desktop:Extension Category="windows.startupTask" Executable="Lysnav.exe"
+                           EntryPoint="Windows.FullTrustApplication">
+          <desktop:StartupTask TaskId="LysnavStartup" DisplayName="Lysnav" Enabled="false" />
+        </desktop:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>

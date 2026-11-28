@@ -180,11 +180,12 @@ def config_path() -> Path:
     return root / "Lysnav" / "config.json"
 
 
-def read_config() -> dict:
-    path = config_path()
-    if not path.exists():
-        # Read the previous installation until Lysnav saves its first settings.
-        path = path.parent.parent / "DIRIGERA" / path.name
+def read_config(path: Path | None = None) -> dict:
+    if path is None:
+        path = config_path()
+        if not path.exists():
+            # Read the previous installation until Lysnav saves its first settings.
+            path = path.parent.parent / "DIRIGERA" / path.name
     if not path.exists():
         return {"ip": "", "token": "", "approved": {}, "approved_sensors": {},
                 "tray_room": None, "tray_icon_path": ""}
@@ -208,8 +209,9 @@ def read_config() -> dict:
     }
 
 
-def write_config(config: dict) -> None:
-    path = config_path()
+def write_config(config: dict, path: Path | None = None) -> None:
+    if path is None:
+        path = config_path()
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if os.name != "nt":
         os.chmod(path.parent, 0o700)

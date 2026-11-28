@@ -1,0 +1,6 @@
+-r requirements-build.txt
+winrt-runtime==4.2.1
+winrt-Windows.ApplicationModel==4!10.0.28000.2957
+winrt-Windows.ApplicationModel.Activation==4!10.0.28000.2957
+winrt-Windows.Services.Store==4!10.0.28000.2957
+winrt-Windows.Storage==4!10.0.28000.2957

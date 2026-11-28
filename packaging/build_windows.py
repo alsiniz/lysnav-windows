@@ -78,12 +78,16 @@ def find_iscc():
     return None
 
 
-def copy_licenses():
-    output = APP / "licenses"
+def copy_licenses(app_dir=APP, requirements_file="requirements.txt"):
+    output = app_dir / "licenses"
     shutil.copytree(ROOT / "packaging" / "qt-licenses", output / "Qt", dirs_exist_ok=True)
     shutil.copy2(ROOT / "LICENSE", output / "Lysnav-LICENSE.txt")
     shutil.copy2(ROOT / "THIRD_PARTY_NOTICES.md", output / "THIRD_PARTY_NOTICES.md")
-    pending = deque(Requirement(line) for line in (ROOT / "requirements.txt").read_text().splitlines())
+    pending = deque()
+    pending.extend(Requirement(line) for line in (ROOT / "requirements.txt").read_text().splitlines())
+    if requirements_file != "requirements.txt":
+        pending.extend(Requirement(line) for line in (ROOT / requirements_file).read_text().splitlines()
+                       if line and not line.startswith(("#", "-r ")))
     installed = {}
     while pending:
         requirement = pending.popleft()
@@ -116,7 +120,7 @@ def copy_licenses():
     )
 
 
-def freeze_app(name, mode, output):
+def freeze_app(name, mode, output, *, entry_point="app.py"):
     extra_data = ["--add-data", f"{APP / 'licenses'}:licenses"] if mode == "--onefile" else []
     subprocess.run(
         [
@@ -125,10 +129,11 @@ def freeze_app(name, mode, output):
             "--name", name, "--icon", str(APP_ICON),
             "--distpath", str(output), "--workpath", str(BUILD / "pyinstaller"),
             "--specpath", str(BUILD),
+            "--paths", str(ROOT),
             "--add-data", f"{ROOT / 'assets'}:assets",
             *extra_data,
             "--copy-metadata", "PySide6-Essentials", "--copy-metadata", "dirigera",
-            str(ROOT / "app.py"),
+            str(ROOT / entry_point),
         ],
         check=True,
         cwd=ROOT,
@@ -149,6 +154,22 @@ def check_runtime(executable):
         check=True,
         timeout=60,
     )
+
+
+def verify_standalone_bundle(executable):
+    from PyInstaller.archive.readers import CArchiveReader
+
+    archive = CArchiveReader(str(executable))
+    names = set(archive.toc)
+    names.update(archive.open_embedded_archive("PYZ.pyz").toc)
+    if (executable.parent / "_internal").is_dir():
+        names.update(str(path.relative_to(executable.parent / "_internal"))
+                     for path in (executable.parent / "_internal").rglob("*"))
+    unexpected = sorted(name for name in names if name.startswith(
+        ("store_launcher", "store_license", "winrt.", "winrt\\", "winrt/", "winrt_runtime")
+    ) or name == "winrt")
+    if unexpected:
+        raise RuntimeError(f"Store dependencies in standalone build: {unexpected}")
 
 
 def main():
@@ -183,8 +204,10 @@ def main():
         parser.error("Run a full build with --portable-exe first")
 
     check_runtime(APP / "Lysnav.exe")
+    verify_standalone_bundle(APP / "Lysnav.exe")
     if args.portable_exe:
         check_runtime(portable_executable)
+        verify_standalone_bundle(portable_executable)
     RELEASE.mkdir(exist_ok=True)
     subprocess.run(
         [str(iscc.resolve()), f"/DAppVersion={VERSION}", str(ROOT / "packaging" / "lysnav.iss")],
