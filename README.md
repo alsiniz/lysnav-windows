@@ -18,6 +18,12 @@ hub over your local network.
 This is the Qt-based Windows port of [Lysnav for KDE Plasma](https://github.com/alsiniz/lysnav-plasma),
 based on upstream commit [`a334176`](https://github.com/alsiniz/lysnav-plasma/commit/a334176309953518c76e9b2339e4c152c99556ae).
 
+App screenshots use sample rooms and devices.
+
+<p align="center">
+  <img src="docs/screenshots/main-window.png" alt="Lysnav for Windows showing room-wide and individual light controls" width="860">
+</p>
+
 ## Why Lysnav for Windows?
 
 - **Local control.** Use your existing hub over the LAN without a cloud login
@@ -30,6 +36,20 @@ based on upstream commit [`a334176`](https://github.com/alsiniz/lysnav-plasma/co
 - **Live colour control.** Adjust power, brightness, and colour temperature
   for rooms or individual bulbs. Preview changes with the live colour wheel
   on bulbs that support RGB.
+
+## See it in action
+
+### Live colour control
+
+<p align="center">
+  <img src="docs/screenshots/colour-wheel.png" alt="Live colour wheel with a purple selection and hue and saturation readouts" width="505">
+</p>
+
+### Climate readings
+
+<p align="center">
+  <img src="docs/screenshots/climate.png" alt="Climate tab showing temperature, humidity, and battery for two approved sensors" width="740">
+</p>
 
 ## Requirements
 
@@ -66,6 +86,14 @@ Download the **v1.0.0** from [GitHub Releases](https://github.com/alsiniz/lysnav
 
 A DHCP reservation in your router helps the hub keep the same IP address.
 
+<p align="center">
+  <img src="docs/screenshots/hub-settings.png" alt="Hub settings with a sample address, masked access token, and DHCP reservation guidance" width="690">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/gui-pairing.png" alt="Generate token dialog showing the hub action button and the Continue step" width="654">
+</p>
+
 ## Control from the Windows tray
 
 Look for the **lamp icon** by the clock. If Windows puts it behind the
@@ -78,6 +106,10 @@ the selection; Cancel leaves it unchanged. Lysnav remembers the selected file
 path between launches, so keep the file in a permanent location. If it is
 unavailable when Lysnav starts or the settings are saved, the default lamp is
 used. The full-colour application and taskbar button icons are unaffected.
+
+<p align="center">
+  <img src="docs/screenshots/tray-settings.png" alt="Tray settings with Living room selected and a preview of the orange default lamp" width="680">
+</p>
 
 | Interaction | What happens |
 | --- | --- |
@@ -104,6 +136,10 @@ in the main window to exit.
   `%LOCALAPPDATA%\Lysnav\config.json` for settings, including the token.
 - **The app uses the unofficial local DIRIGERA API.** IKEA firmware changes
   may affect compatibility.
+
+<p align="center">
+  <img src="docs/screenshots/device-approval.png" alt="Choose devices with approved lights and climate sensors and an unchecked kitchen light" width="665">
+</p>
 
 ## Troubleshooting
 
